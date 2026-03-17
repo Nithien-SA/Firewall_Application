@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from gui import theme
+from gui import dialogs
 from core import firewall
 from core.privilege import is_root
 
@@ -212,17 +213,41 @@ class RulesTab:
                 self._on_action(msg)
 
     def _flush_chain(self):
-        chain = self._chain_var.get()
+        # 1. Ask which chain(s) to flush
+        chain_choice = dialogs.ask_chain(self.parent, verb="Flush")
+        if chain_choice is None:
+            return
+
+        # 2. Build list of chains to flush
+        if chain_choice == "BOTH":
+            chains = ["INPUT", "OUTPUT"]
+        else:
+            chains = [chain_choice]
+
+        # 3. Confirm
+        chain_str = " + ".join(chains)
         confirm = messagebox.askyesno(
             "Confirm Flush",
-            f"This will DELETE ALL rules from the {chain} chain.\n\nAre you sure?",
+            f"Delete ALL rules from: {chain_str}?\n\nThis cannot be undone.",
             icon="warning",
         )
         if not confirm:
             return
-        ok, msg = firewall.flush_chain(chain)
-        self._log(msg, ok)
-        if ok:
+
+        # 4. Execute flush(es)
+        messages = []
+        any_ok = False
+        for ch in chains:
+            ok, msg = firewall.flush_chain(ch)
+            messages.append(msg)
+            if ok:
+                any_ok = True
+
+        combined = "\n".join(messages)
+        self._log(combined, any_ok)
+
+        if any_ok:
+            # Refresh the currently viewed chain
             self.refresh()
             if self._on_action:
-                self._on_action(msg)
+                self._on_action(combined)

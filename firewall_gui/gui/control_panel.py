@@ -321,13 +321,27 @@ class ControlPanel:
 
     # ─── Pre-fill from right-click ─────────────────────────────────────────────
 
-    def prefill(self, action: str, value: str):
-        """Pre-fill the appropriate form field from a Traffic Monitor right-click."""
+    def prefill(self, action: str, value: str, direction: str = "INPUT"):
+        """Pre-fill form fields from a Traffic Monitor right-click.
+        direction is 'INPUT', 'OUTPUT', or 'BOTH' from the direction dialog.
+        """
         if action == "block_ip":
             self._ip_var.set(value)
+            # BOTH doesn't map to the single-direction dropdown, default INPUT
+            self._direction_var.set(direction if direction != "BOTH" else "INPUT")
             self._ip_entry.focus_set()
-            self._log(f"Pre-filled IP: {value}  (from Traffic Monitor)", ok=True)
+            self._log(
+                f"Pre-filled IP: {value}  direction: {direction}  "
+                f"(from Traffic Monitor -- click 'Block IP' to apply)",
+                ok=True,
+            )
         elif action == "block_port":
             self._port_var.set(value)
+            # Port block is handled by block_port() which covers both chains internally
             self._port_entry.focus_set()
-            self._log(f"Pre-filled port: {value}  (from Traffic Monitor)", ok=True)
+            self._log(
+                f"Pre-filled port: {value}  direction: {direction}  "
+                f"(from Traffic Monitor -- click 'Block Port' to apply)",
+                ok=True,
+            )
+

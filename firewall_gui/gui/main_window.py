@@ -1,7 +1,6 @@
 """
 main_window.py
 Root Tk window — hosts the tabbed notebook, status bar, and refresh loop.
-All emoji removed for Linux Tk compatibility.
 """
 
 import tkinter as tk
@@ -12,39 +11,35 @@ from gui import theme
 from gui.traffic_tab import TrafficTab
 from gui.rules_tab import RulesTab
 from gui.control_panel import ControlPanel
+from gui.settings_tab import SettingsTab
 from core.privilege import is_root, get_mode_label, get_mode_color
 
-
-REFRESH_INTERVAL_MS = 3000   # 3 seconds
+REFRESH_INTERVAL_MS = 3000   # default 3 seconds
 
 
 class MainWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root_priv = is_root()
+        self._refresh_ms = REFRESH_INTERVAL_MS
+        self._refresh_job = None
 
-        # ── Window setup ─────────────────────────────────────────────────────
         mode = get_mode_label()
         self.root.title(f"FirewallGUI  --  {mode}")
-        self.root.geometry("1280x780")
-        self.root.minsize(960, 620)
+        self.root.geometry("1280x800")
+        self.root.minsize(960, 640)
         self.root.configure(bg=theme.BG_DARK)
 
-        # Silently ignore WM hints that may not be supported
         try:
             self.root.wm_attributes("-type", "normal")
         except Exception:
             pass
 
-        # Apply theme
         theme.apply_theme(self.root)
 
-        # ── Build layout ─────────────────────────────────────────────────────
         self._build_header()
         self._build_notebook()
         self._build_statusbar()
-
-        # ── Start refresh loop ───────────────────────────────────────────────
         self._schedule_refresh()
 
     # ─── Header ──────────────────────────────────────────────────────────────
@@ -53,45 +48,46 @@ class MainWindow:
         hdr = tk.Frame(self.root, bg=theme.BG_PANEL)
         hdr.pack(fill="x", side="top")
 
-        # Left: app name
         tk.Label(
             hdr, text="FirewallGUI",
             bg=theme.BG_PANEL, fg=theme.ACCENT,
             font=theme.FONT_TITLE, padx=18, pady=12,
         ).pack(side="left")
 
-        # Right: privilege badge — plain text, no emoji
         badge_color = get_mode_color()
-        mode_label  = get_mode_label().upper()
         tk.Label(
-            hdr, text=f"  {mode_label}  ",
+            hdr, text=f"  {get_mode_label().upper()}  ",
             bg=badge_color, fg=theme.BG_DARK,
             font=theme.FONT_BOLD, padx=6, pady=4,
         ).pack(side="right", padx=18, pady=10)
 
-        # Separator
         ttk.Separator(self.root, orient="horizontal").pack(fill="x", side="top")
 
     # ─── Notebook ─────────────────────────────────────────────────────────────
 
     def _build_notebook(self):
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=0, pady=0)
+        self.notebook.pack(fill="both", expand=True)
 
-        # Tab 1 — Traffic Monitor
         frame1 = ttk.Frame(self.notebook)
         self.traffic_tab = TrafficTab(frame1, self._on_context_action)
         self.notebook.add(frame1, text="  Traffic Monitor  ")
 
-        # Tab 2 — Firewall Rules
         frame2 = ttk.Frame(self.notebook)
         self.rules_tab = RulesTab(frame2, on_action=self._on_fw_action)
         self.notebook.add(frame2, text="  Firewall Rules  ")
 
-        # Tab 3 — Control Panel
         frame3 = ttk.Frame(self.notebook)
         self.control_panel = ControlPanel(frame3, on_action=self._on_fw_action)
         self.notebook.add(frame3, text="  Control Panel  ")
+
+        frame4 = ttk.Frame(self.notebook)
+        self.settings_tab = SettingsTab(
+            frame4,
+            on_font_size_change=self._on_font_size_change,
+            on_refresh_change=self._on_refresh_change,
+        )
+        self.notebook.add(frame4, text="  Settings  ")
 
     # ─── Status bar ───────────────────────────────────────────────────────────
 
@@ -113,36 +109,46 @@ class MainWindow:
 
     def _update_statusbar(self, conn_count: int):
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        mode_color = get_mode_color()
-        mode_label = get_mode_label()
         self._status_left.configure(
-            text=f"Mode: {mode_label}   |   Connections visible: {conn_count}",
-            fg=mode_color,
+            text=f"Mode: {get_mode_label()}   |   Connections: {conn_count}   |   "
+                 f"Refresh: {self._refresh_ms // 1000}s",
+            fg=get_mode_color(),
         )
         self._status_right.configure(text=f"Last refresh: {now}")
 
     # ─── Refresh loop ─────────────────────────────────────────────────────────
 
     def _schedule_refresh(self):
+        if self._refresh_job:
+            self.root.after_cancel(self._refresh_job)
         self._do_refresh()
-        self.root.after(REFRESH_INTERVAL_MS, self._schedule_refresh)
+        self._refresh_job = self.root.after(self._refresh_ms, self._schedule_refresh)
 
     def _do_refresh(self):
         count = self.traffic_tab.refresh()
         self._update_statusbar(count)
-
-        # Also refresh rules tab if it's currently visible
         if self.notebook.index("current") == 1:
             self.rules_tab.refresh()
 
+    # ─── Settings callbacks ───────────────────────────────────────────────────
+
+    def _on_font_size_change(self, size: int):
+        """Live-update font size across the whole app."""
+        theme.apply_theme(self.root, font_size=size)
+
+    def _on_refresh_change(self, ms: int):
+        """Reset the refresh loop with a new interval."""
+        self._refresh_ms = ms
+        self._schedule_refresh()
+
     # ─── Inter-tab communication ───────────────────────────────────────────────
 
-    def _on_context_action(self, action: str, value: str):
-        """Called when user right-clicks in traffic tab -> pre-fills control panel."""
-        self.notebook.select(2)  # switch to Control Panel tab
-        self.control_panel.prefill(action, value)
+    def _on_context_action(self, action: str, value: str, direction: str = "INPUT"):
+        """Called from traffic tab right-click — pre-fills control panel."""
+        self.notebook.select(2)
+        self.control_panel.prefill(action, value, direction)
 
     def _on_fw_action(self, message: str):
-        """Called after any firewall action from any tab -- keeps both tabs in sync."""
+        """Called after any firewall action — keeps Rules and Control Panel in sync."""
         self.rules_tab.refresh()
         self.control_panel.log_external(message)

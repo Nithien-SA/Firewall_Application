@@ -1,30 +1,31 @@
 """
 theme.py
 Central design system — dark slate palette with cyan accent.
-Applied globally to ttk.Style and used as constants throughout the GUI.
+Fonts are tkinter.font.Font objects so size can be updated live.
 """
 
 import tkinter as tk
 from tkinter import ttk
+import tkinter.font as tkfont
 
 
 # ─── Colour Palette ────────────────────────────────────────────────────────────
-BG_DARK       = "#0d1117"   # main window background
-BG_PANEL      = "#161b22"   # card / panel background
-BG_WIDGET     = "#21262d"   # input fields, treeview bg
-BG_HOVER      = "#30363d"   # hover state
-BORDER        = "#30363d"   # border / separator
+BG_DARK       = "#0d1117"
+BG_PANEL      = "#161b22"
+BG_WIDGET     = "#21262d"
+BG_HOVER      = "#30363d"
+BORDER        = "#30363d"
 
-ACCENT        = "#00b4d8"   # primary cyan accent
-ACCENT_DARK   = "#0077b6"   # secondary / pressed accent
-SUCCESS       = "#00e676"   # green — allowed / established
-WARNING       = "#ff9800"   # amber — read-only / time-wait
-DANGER        = "#f44336"   # red — blocked / drop
-INFO          = "#60a5fa"   # blue — listen
+ACCENT        = "#00b4d8"
+ACCENT_DARK   = "#0077b6"
+SUCCESS       = "#00e676"
+WARNING       = "#ff9800"
+DANGER        = "#f44336"
+INFO          = "#60a5fa"
 
-TEXT_PRIMARY   = "#e6edf3"  # main text
-TEXT_SECONDARY = "#8b949e"  # muted labels
-TEXT_ACCENT    = "#00b4d8"  # highlighted text
+TEXT_PRIMARY   = "#e6edf3"
+TEXT_SECONDARY = "#8b949e"
+TEXT_ACCENT    = "#00b4d8"
 
 # ─── Row Tag Colours ───────────────────────────────────────────────────────────
 ROW_ESTABLISHED = "#0d2818"
@@ -33,38 +34,62 @@ ROW_TIMEWAIT    = "#2d1e00"
 ROW_DROP        = "#2d0d0d"
 ROW_ACCEPT      = "#0d2818"
 
-# ─── Fonts ─────────────────────────────────────────────────────────────────────
-# Use a cross-platform monospace font; Tkinter will fall back gracefully.
-FONT_FAMILY     = "DejaVu Sans Mono"   # Linux default; Windows falls back fine
-FONT_MONO_FAMILY = "DejaVu Sans Mono"  # for log text boxes
-FONT_UI_FAMILY  = "sans-serif"         # generic UI labels
+# ─── Font settings ─────────────────────────────────────────────────────────────
+FONT_FAMILY  = "DejaVu Sans Mono"
+_font_size   = 10   # current size, readable by settings_tab
 
-FONT_NORMAL     = (FONT_FAMILY, 10)
-FONT_SMALL      = (FONT_FAMILY, 9)
-FONT_BOLD       = (FONT_FAMILY, 10, "bold")
-FONT_HEADER     = (FONT_FAMILY, 13, "bold")
-FONT_TITLE      = (FONT_FAMILY, 16, "bold")
-FONT_MONO       = (FONT_MONO_FAMILY, 9)
+# These are set to Font objects by apply_theme() and updated live by update_font_size()
+FONT_NORMAL  = None
+FONT_SMALL   = None
+FONT_BOLD    = None
+FONT_HEADER  = None
+FONT_TITLE   = None
+FONT_MONO    = None
 
 # ─── Dimensions ────────────────────────────────────────────────────────────────
-PAD             = 10
-PAD_SM          = 6
-CORNER_RADIUS   = 6
+PAD    = 10
+PAD_SM = 6
 
 
-def apply_theme(root: tk.Tk):
-    """Apply the dark theme globally to all ttk widgets."""
+def apply_theme(root: tk.Tk, font_size: int = None):
+    """
+    Apply the dark theme globally and (re)initialise Font objects.
+    Call with font_size= to change the font size live.
+    """
+    global _font_size, FONT_NORMAL, FONT_SMALL, FONT_BOLD, FONT_HEADER, FONT_TITLE, FONT_MONO
+
+    if font_size is not None:
+        _font_size = font_size
+
+    sz = _font_size
+    fam = FONT_FAMILY
+
+    if FONT_NORMAL is None:
+        # First call: create Font objects (requires Tk to be running)
+        FONT_NORMAL = tkfont.Font(family=fam, size=sz)
+        FONT_SMALL  = tkfont.Font(family=fam, size=sz - 1)
+        FONT_BOLD   = tkfont.Font(family=fam, size=sz,  weight="bold")
+        FONT_HEADER = tkfont.Font(family=fam, size=sz + 3, weight="bold")
+        FONT_TITLE  = tkfont.Font(family=fam, size=sz + 6, weight="bold")
+        FONT_MONO   = tkfont.Font(family=fam, size=sz - 1)
+    else:
+        # Subsequent calls: update size in-place — propagates to all widgets using them
+        FONT_NORMAL.configure(size=sz)
+        FONT_SMALL.configure(size=sz - 1)
+        FONT_BOLD.configure(size=sz)
+        FONT_HEADER.configure(size=sz + 3)
+        FONT_TITLE.configure(size=sz + 6)
+        FONT_MONO.configure(size=sz - 1)
+
+    # ── ttk styles ─────────────────────────────────────────────────────────────
     style = ttk.Style(root)
     style.theme_use("clam")
 
-    # General
     style.configure(".",
         background=BG_DARK, foreground=TEXT_PRIMARY,
-        font=FONT_NORMAL, borderwidth=0,
-        relief="flat",
+        font=FONT_NORMAL, borderwidth=0, relief="flat",
     )
 
-    # Notebook
     style.configure("TNotebook",
         background=BG_DARK, borderwidth=0, tabmargins=[0, 0, 0, 0],
     )
@@ -77,9 +102,7 @@ def apply_theme(root: tk.Tk):
         foreground=[("selected", ACCENT), ("active", TEXT_PRIMARY)],
     )
 
-    # Frame / LabelFrame
     style.configure("TFrame", background=BG_DARK)
-    style.configure("Card.TFrame", background=BG_PANEL, relief="flat")
     style.configure("TLabelframe",
         background=BG_PANEL, foreground=ACCENT,
         bordercolor=BORDER, relief="flat", borderwidth=1,
@@ -88,7 +111,6 @@ def apply_theme(root: tk.Tk):
         background=BG_PANEL, foreground=ACCENT, font=FONT_BOLD,
     )
 
-    # Treeview
     style.configure("Treeview",
         background=BG_WIDGET, foreground=TEXT_PRIMARY,
         rowheight=26, fieldbackground=BG_WIDGET,
@@ -106,57 +128,48 @@ def apply_theme(root: tk.Tk):
         background=[("active", BG_HOVER)],
     )
 
-    # Buttons
     style.configure("TButton",
         background=BG_WIDGET, foreground=TEXT_PRIMARY,
-        font=FONT_BOLD, padding=[12, 6], relief="flat",
-        borderwidth=0,
+        font=FONT_BOLD, padding=[12, 6], relief="flat", borderwidth=0,
     )
     style.map("TButton",
         background=[("active", BG_HOVER), ("disabled", BG_PANEL)],
         foreground=[("disabled", TEXT_SECONDARY)],
     )
     style.configure("Accent.TButton",
-        background=ACCENT, foreground=BG_DARK,
-        font=FONT_BOLD, padding=[12, 6],
+        background=ACCENT, foreground=BG_DARK, font=FONT_BOLD, padding=[12, 6],
     )
     style.map("Accent.TButton",
         background=[("active", ACCENT_DARK), ("disabled", BG_WIDGET)],
         foreground=[("disabled", TEXT_SECONDARY)],
     )
     style.configure("Danger.TButton",
-        background=DANGER, foreground=TEXT_PRIMARY,
-        font=FONT_BOLD, padding=[12, 6],
+        background=DANGER, foreground=TEXT_PRIMARY, font=FONT_BOLD, padding=[12, 6],
     )
     style.map("Danger.TButton",
         background=[("active", "#b71c1c"), ("disabled", BG_WIDGET)],
         foreground=[("disabled", TEXT_SECONDARY)],
     )
     style.configure("Success.TButton",
-        background=SUCCESS, foreground=BG_DARK,
-        font=FONT_BOLD, padding=[12, 6],
+        background=SUCCESS, foreground=BG_DARK, font=FONT_BOLD, padding=[12, 6],
     )
     style.map("Success.TButton",
         background=[("active", "#00a152"), ("disabled", BG_WIDGET)],
         foreground=[("disabled", TEXT_SECONDARY)],
     )
 
-    # Entry
     style.configure("TEntry",
         fieldbackground=BG_WIDGET, foreground=TEXT_PRIMARY,
-        insertcolor=ACCENT, bordercolor=BORDER,
-        relief="flat", padding=[6, 4],
+        insertcolor=ACCENT, bordercolor=BORDER, relief="flat", padding=[6, 4],
     )
     style.map("TEntry",
         bordercolor=[("focus", ACCENT)],
         fieldbackground=[("disabled", BG_PANEL)],
     )
 
-    # Combobox
     style.configure("TCombobox",
         fieldbackground=BG_WIDGET, foreground=TEXT_PRIMARY,
-        background=BG_WIDGET, arrowcolor=ACCENT,
-        relief="flat", padding=[6, 4],
+        background=BG_WIDGET, arrowcolor=ACCENT, relief="flat", padding=[6, 4],
     )
     style.map("TCombobox",
         fieldbackground=[("readonly", BG_WIDGET)],
@@ -164,20 +177,10 @@ def apply_theme(root: tk.Tk):
         selectforeground=[("readonly", TEXT_PRIMARY)],
     )
 
-    # Scrollbar
     style.configure("TScrollbar",
         background=BG_PANEL, troughcolor=BG_DARK,
         arrowcolor=TEXT_SECONDARY, borderwidth=0,
     )
-    style.map("TScrollbar",
-        background=[("active", BG_HOVER)],
-    )
+    style.map("TScrollbar", background=[("active", BG_HOVER)])
 
-    # Separator
     style.configure("TSeparator", background=BORDER)
-
-    # Status label
-    style.configure("Status.TLabel",
-        background=BG_PANEL, foreground=TEXT_SECONDARY,
-        font=FONT_SMALL, padding=[8, 4],
-    )

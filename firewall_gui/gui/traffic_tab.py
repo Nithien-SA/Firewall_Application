@@ -2,13 +2,15 @@
 traffic_tab.py
 Live network connections table with auto-refresh, filtering,
 colour-coded rows, and a right-click context menu.
-All emoji removed for Linux Tk compatibility.
+Right-click actions show a direction dialog (INPUT / OUTPUT / BOTH)
+before pre-filling the Control Panel.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 from gui import theme
+from gui import dialogs
 from core.traffic import get_connections
 from core.privilege import is_root
 
@@ -35,6 +37,12 @@ COL_WIDTHS = {
 
 class TrafficTab:
     def __init__(self, parent: ttk.Frame, on_context_action):
+        """
+        on_context_action(action, value, direction):
+          action    = 'block_ip' | 'block_port'
+          value     = IP string | port string
+          direction = 'INPUT' | 'OUTPUT' | 'BOTH'
+        """
         self.parent = parent
         self.on_context_action = on_context_action
         self._connections = []
@@ -54,8 +62,7 @@ class TrafficTab:
 
         tk.Label(
             bar, text="Filter:",
-            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY,
-            font=theme.FONT_NORMAL,
+            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY, font=theme.FONT_NORMAL,
         ).pack(side="left", padx=(0, 6))
 
         self._filter_var = tk.StringVar()
@@ -76,8 +83,7 @@ class TrafficTab:
 
         self._count_label = tk.Label(
             bar, text="",
-            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY,
-            font=theme.FONT_SMALL,
+            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY, font=theme.FONT_SMALL,
         )
         self._count_label.pack(side="right", padx=8)
 
@@ -91,11 +97,8 @@ class TrafficTab:
         hsb = ttk.Scrollbar(container, orient="horizontal")
 
         self.tree = ttk.Treeview(
-            container,
-            columns=COLUMNS,
-            show="headings",
-            yscrollcommand=vsb.set,
-            xscrollcommand=hsb.set,
+            container, columns=COLUMNS, show="headings",
+            yscrollcommand=vsb.set, xscrollcommand=hsb.set,
             selectmode="browse",
         )
         vsb.config(command=self.tree.yview)
@@ -133,11 +136,11 @@ class TrafficTab:
             font=theme.FONT_NORMAL, bd=0,
         )
         self._ctx_menu.add_command(
-            label="Block Remote IP",
+            label="Block Remote IP ...",
             command=self._ctx_block_ip,
         )
         self._ctx_menu.add_command(
-            label="Block Local Port",
+            label="Block Local Port ...",
             command=self._ctx_block_port,
         )
         self._ctx_menu.add_separator()
@@ -160,17 +163,41 @@ class TrafficTab:
 
     def _ctx_block_ip(self):
         vals = self._get_selected_values()
-        if vals:
-            remote_ip = vals[3]
-            if remote_ip and remote_ip not in ("0.0.0.0", "::", "*", ""):
-                self.on_context_action("block_ip", remote_ip)
+        if not vals:
+            return
+        remote_ip = str(vals[3])
+        if not remote_ip or remote_ip in ("0.0.0.0", "::", "*", ""):
+            messagebox.showinfo(
+                "No Remote IP",
+                "This connection has no remote IP address to block.",
+            )
+            return
+
+        # Ask direction via dialog
+        direction = dialogs.ask_block_direction(self.tree, label="IP", value=remote_ip)
+        if direction is None:
+            return  # cancelled
+
+        self.on_context_action("block_ip", remote_ip, direction)
 
     def _ctx_block_port(self):
         vals = self._get_selected_values()
-        if vals:
-            local_port = vals[1]
-            if local_port and str(local_port) not in ("0", "*", ""):
-                self.on_context_action("block_port", str(local_port))
+        if not vals:
+            return
+        local_port = str(vals[1])
+        if not local_port or local_port in ("0", "*", ""):
+            messagebox.showinfo(
+                "No Port",
+                "This connection has no local port to block.",
+            )
+            return
+
+        # Ask direction via dialog
+        direction = dialogs.ask_block_direction(self.tree, label="Port", value=local_port)
+        if direction is None:
+            return  # cancelled
+
+        self.on_context_action("block_port", local_port, direction)
 
     def _ctx_show_details(self):
         vals = self._get_selected_values()
@@ -236,38 +263,31 @@ class TrafficTab:
         for c in conns:
             pid_str = str(c.pid) if c.pid > 0 else ""
             values = (
-                c.protocol,
-                c.local_port,
-                c.local_ip,
-                c.remote_ip  if c.remote_port else "",
+                c.protocol, c.local_port, c.local_ip,
+                c.remote_ip if c.remote_port else "",
                 c.remote_port if c.remote_port else "",
-                c.state,
-                pid_str,
-                c.process_name,
+                c.state, pid_str, c.process_name,
             )
-            tag = _state_tag(c.state)
-            self.tree.insert("", "end", values=values, tags=(tag,))
+            self.tree.insert("", "end", values=values, tags=(_state_tag(c.state),))
 
-        visible = len(conns)
-        total   = len(self._connections)
         self._count_label.configure(
-            text=f"Showing {visible} / {total} connections",
+            text=f"Showing {len(conns)} / {len(self._connections)} connections",
         )
 
 
 def _col_attr(col: str) -> str:
     return {
         "protocol": "protocol", "local_port": "local_port",
-        "local_ip": "local_ip",   "remote_ip": "remote_ip",
+        "local_ip": "local_ip", "remote_ip": "remote_ip",
         "remote_port": "remote_port", "state": "state",
-        "pid": "pid",              "process": "process_name",
+        "pid": "pid",  "process": "process_name",
     }.get(col, col)
 
 
 def _state_tag(state: str) -> str:
     s = state.upper()
-    if s == "ESTABLISHED":                    return "ESTABLISHED"
-    if s in ("LISTEN", "0A"):                 return "LISTEN"
+    if s == "ESTABLISHED":                         return "ESTABLISHED"
+    if s in ("LISTEN", "0A"):                      return "LISTEN"
     if s in ("TIME_WAIT", "FIN_WAIT1", "FIN_WAIT2"): return "TIME_WAIT"
-    if s in ("UDP", "UDP6"):                  return "UDP"
+    if s in ("UDP", "UDP6"):                       return "UDP"
     return "OTHER"
