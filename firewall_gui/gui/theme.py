@@ -7,6 +7,7 @@ Applied globally to ttk.Style and used as constants throughout the GUI.
 import tkinter as tk
 from tkinter import ttk
 
+
 # ─── Colour Palette ────────────────────────────────────────────────────────────
 BG_DARK       = "#0d1117"   # main window background
 BG_PANEL      = "#161b22"   # card / panel background
@@ -33,13 +34,17 @@ ROW_DROP        = "#2d0d0d"
 ROW_ACCEPT      = "#0d2818"
 
 # ─── Fonts ─────────────────────────────────────────────────────────────────────
-FONT_FAMILY     = "Consolas"
+# Use a cross-platform monospace font; Tkinter will fall back gracefully.
+FONT_FAMILY     = "DejaVu Sans Mono"   # Linux default; Windows falls back fine
+FONT_MONO_FAMILY = "DejaVu Sans Mono"  # for log text boxes
+FONT_UI_FAMILY  = "sans-serif"         # generic UI labels
+
 FONT_NORMAL     = (FONT_FAMILY, 10)
 FONT_SMALL      = (FONT_FAMILY, 9)
 FONT_BOLD       = (FONT_FAMILY, 10, "bold")
 FONT_HEADER     = (FONT_FAMILY, 13, "bold")
 FONT_TITLE      = (FONT_FAMILY, 16, "bold")
-FONT_MONO       = ("Courier New", 9)
+FONT_MONO       = (FONT_MONO_FAMILY, 9)
 
 # ─── Dimensions ────────────────────────────────────────────────────────────────
 PAD             = 10
@@ -171,7 +176,7 @@ def apply_theme(root: tk.Tk):
     # Separator
     style.configure("TSeparator", background=BORDER)
 
-    # Progress / Status label areas
+    # Status label
     style.configure("Status.TLabel",
         background=BG_PANEL, foreground=TEXT_SECONDARY,
         font=FONT_SMALL, padding=[8, 4],

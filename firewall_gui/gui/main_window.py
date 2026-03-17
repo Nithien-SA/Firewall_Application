@@ -1,6 +1,7 @@
 """
 main_window.py
 Root Tk window — hosts the tabbed notebook, status bar, and refresh loop.
+All emoji removed for Linux Tk compatibility.
 """
 
 import tkinter as tk
@@ -24,13 +25,16 @@ class MainWindow:
 
         # ── Window setup ─────────────────────────────────────────────────────
         mode = get_mode_label()
-        self.root.title(f"FirewallGUI  —  {mode}")
+        self.root.title(f"FirewallGUI  --  {mode}")
         self.root.geometry("1280x780")
-        self.root.minsize(900, 600)
+        self.root.minsize(960, 620)
         self.root.configure(bg=theme.BG_DARK)
 
-        # Icon-less — set a window class name for WM hints
-        self.root.wm_attributes("-type", "normal")
+        # Silently ignore WM hints that may not be supported
+        try:
+            self.root.wm_attributes("-type", "normal")
+        except Exception:
+            pass
 
         # Apply theme
         theme.apply_theme(self.root)
@@ -46,21 +50,21 @@ class MainWindow:
     # ─── Header ──────────────────────────────────────────────────────────────
 
     def _build_header(self):
-        hdr = tk.Frame(self.root, bg=theme.BG_PANEL, pady=0)
+        hdr = tk.Frame(self.root, bg=theme.BG_PANEL)
         hdr.pack(fill="x", side="top")
 
         # Left: app name
         tk.Label(
-            hdr, text="🛡  FirewallGUI",
+            hdr, text="FirewallGUI",
             bg=theme.BG_PANEL, fg=theme.ACCENT,
             font=theme.FONT_TITLE, padx=18, pady=12,
         ).pack(side="left")
 
-        # Right: privilege badge
+        # Right: privilege badge — plain text, no emoji
         badge_color = get_mode_color()
-        badge_text  = f"  ● {get_mode_label()}  "
+        mode_label  = get_mode_label().upper()
         tk.Label(
-            hdr, text=badge_text,
+            hdr, text=f"  {mode_label}  ",
             bg=badge_color, fg=theme.BG_DARK,
             font=theme.FONT_BOLD, padx=6, pady=4,
         ).pack(side="right", padx=18, pady=10)
@@ -77,17 +81,17 @@ class MainWindow:
         # Tab 1 — Traffic Monitor
         frame1 = ttk.Frame(self.notebook)
         self.traffic_tab = TrafficTab(frame1, self._on_context_action)
-        self.notebook.add(frame1, text="  📡  Traffic Monitor  ")
+        self.notebook.add(frame1, text="  Traffic Monitor  ")
 
         # Tab 2 — Firewall Rules
         frame2 = ttk.Frame(self.notebook)
-        self.rules_tab = RulesTab(frame2)
-        self.notebook.add(frame2, text="  🔒  Firewall Rules  ")
+        self.rules_tab = RulesTab(frame2, on_action=self._on_fw_action)
+        self.notebook.add(frame2, text="  Firewall Rules  ")
 
         # Tab 3 — Control Panel
         frame3 = ttk.Frame(self.notebook)
         self.control_panel = ControlPanel(frame3, on_action=self._on_fw_action)
-        self.notebook.add(frame3, text="  ⚙️   Control Panel  ")
+        self.notebook.add(frame3, text="  Control Panel  ")
 
     # ─── Status bar ───────────────────────────────────────────────────────────
 
@@ -109,10 +113,10 @@ class MainWindow:
 
     def _update_statusbar(self, conn_count: int):
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        mode = get_mode_label()
         mode_color = get_mode_color()
+        mode_label = get_mode_label()
         self._status_left.configure(
-            text=f"Mode: {mode}   |   Connections visible: {conn_count}",
+            text=f"Mode: {mode_label}   |   Connections visible: {conn_count}",
             fg=mode_color,
         )
         self._status_right.configure(text=f"Last refresh: {now}")
@@ -134,10 +138,11 @@ class MainWindow:
     # ─── Inter-tab communication ───────────────────────────────────────────────
 
     def _on_context_action(self, action: str, value: str):
-        """Called when user right-clicks in traffic tab → pre-fills control panel."""
+        """Called when user right-clicks in traffic tab -> pre-fills control panel."""
         self.notebook.select(2)  # switch to Control Panel tab
         self.control_panel.prefill(action, value)
 
     def _on_fw_action(self, message: str):
-        """Called after a firewall action — refresh rules tab."""
+        """Called after any firewall action from any tab -- keeps both tabs in sync."""
         self.rules_tab.refresh()
+        self.control_panel.log_external(message)

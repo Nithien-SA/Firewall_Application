@@ -120,42 +120,60 @@ def get_all_chains() -> tuple[bool, list[str], str]:
 # ─── Write Operations (root required) ─────────────────────────────────────────
 
 def block_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Block incoming traffic on a specific port."""
+    """Block all system communication on a port (both INPUT and OUTPUT chains)."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
     messages = []
     success = True
     for proto in protocols:
-        ok, _, stderr = _run([
+        # Block incoming connections arriving at this port
+        ok_in, _, err_in = _run([
             "iptables", "-A", "INPUT",
             "-p", proto, "--dport", str(port),
             "-j", "DROP"
         ])
-        if ok:
-            messages.append(f"Blocked {proto.upper()} port {port}")
+        # Block outgoing connections going TO this port on remote hosts
+        ok_out, _, err_out = _run([
+            "iptables", "-A", "OUTPUT",
+            "-p", proto, "--dport", str(port),
+            "-j", "DROP"
+        ])
+        if ok_in and ok_out:
+            messages.append(f"Blocked {proto.upper()} port {port} (INPUT + OUTPUT)")
         else:
-            messages.append(f"Failed to block {proto.upper()} port {port}: {stderr}")
+            if not ok_in:
+                messages.append(f"INPUT block failed for {proto.upper()} port {port}: {err_in}")
+            if not ok_out:
+                messages.append(f"OUTPUT block failed for {proto.upper()} port {port}: {err_out}")
             success = False
 
     return success, "\n".join(messages)
 
 
 def unblock_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Remove DROP rule for a specific port."""
+    """Remove DROP rules for a port from both INPUT and OUTPUT chains."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
     messages = []
     success = True
     for proto in protocols:
-        ok, _, stderr = _run([
+        ok_in, _, err_in = _run([
             "iptables", "-D", "INPUT",
             "-p", proto, "--dport", str(port),
             "-j", "DROP"
         ])
-        if ok:
-            messages.append(f"Unblocked {proto.upper()} port {port}")
+        ok_out, _, err_out = _run([
+            "iptables", "-D", "OUTPUT",
+            "-p", proto, "--dport", str(port),
+            "-j", "DROP"
+        ])
+        if ok_in and ok_out:
+            messages.append(f"Unblocked {proto.upper()} port {port} (INPUT + OUTPUT)")
         else:
-            messages.append(f"Failed to unblock {proto.upper()} port {port}: {stderr}")
+            if not ok_in:
+                messages.append(f"INPUT unblock failed for {proto.upper()} port {port}: {err_in}")
+            if not ok_out:
+                messages.append(f"OUTPUT unblock failed for {proto.upper()} port {port}: {err_out}")
             success = False
 
     return success, "\n".join(messages)
@@ -204,21 +222,29 @@ def flush_chain(chain: str = "INPUT") -> tuple[bool, str]:
 
 
 def allow_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Insert an ACCEPT rule at the top of INPUT for a specific port."""
+    """Explicitly ACCEPT a port on both INPUT and OUTPUT chains."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
     messages = []
     success = True
     for proto in protocols:
-        ok, _, stderr = _run([
+        ok_in, _, err_in = _run([
             "iptables", "-I", "INPUT", "1",
             "-p", proto, "--dport", str(port),
             "-j", "ACCEPT"
         ])
-        if ok:
-            messages.append(f"Allowed {proto.upper()} port {port}")
+        ok_out, _, err_out = _run([
+            "iptables", "-I", "OUTPUT", "1",
+            "-p", proto, "--dport", str(port),
+            "-j", "ACCEPT"
+        ])
+        if ok_in and ok_out:
+            messages.append(f"Allowed {proto.upper()} port {port} (INPUT + OUTPUT)")
         else:
-            messages.append(f"Failed to allow {proto.upper()} port {port}: {stderr}")
+            if not ok_in:
+                messages.append(f"INPUT allow failed for {proto.upper()} port {port}: {err_in}")
+            if not ok_out:
+                messages.append(f"OUTPUT allow failed for {proto.upper()} port {port}: {err_out}")
             success = False
 
     return success, "\n".join(messages)

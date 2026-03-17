@@ -1,7 +1,8 @@
 """
 rules_tab.py
-Displays current iptables INPUT chain rules.
+Displays current iptables chain rules.
 Sudo users can delete individual rules or flush the chain.
+All emoji removed for Linux Tk compatibility.
 """
 
 import tkinter as tk
@@ -23,11 +24,12 @@ COL_WIDTHS = {
 
 
 class RulesTab:
-    def __init__(self, parent: ttk.Frame):
+    def __init__(self, parent: ttk.Frame, on_action=None):
         self.parent = parent
         self._root = is_root()
         self._chain_var = tk.StringVar(value="INPUT")
         self._rules = []
+        self._on_action = on_action
 
         parent.configure(style="TFrame")
         self._build_toolbar(parent)
@@ -38,12 +40,13 @@ class RulesTab:
     # ─── Toolbar ──────────────────────────────────────────────────────────────
 
     def _build_toolbar(self, parent):
-        bar = tk.Frame(parent, bg=theme.BG_DARK, pady=6)
-        bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD, 0))
+        bar = tk.Frame(parent, bg=theme.BG_DARK)
+        bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD, 4))
 
         tk.Label(
-            bar, text="Chain:", bg=theme.BG_DARK,
-            fg=theme.TEXT_SECONDARY, font=theme.FONT_NORMAL,
+            bar, text="Chain:",
+            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY,
+            font=theme.FONT_NORMAL,
         ).pack(side="left", padx=(0, 6))
 
         chain_combo = ttk.Combobox(
@@ -51,17 +54,18 @@ class RulesTab:
             values=["INPUT", "OUTPUT", "FORWARD"],
             state="readonly", width=12,
         )
-        chain_combo.pack(side="left", padx=(0, 12))
+        chain_combo.pack(side="left", padx=(0, 10))
         chain_combo.bind("<<ComboboxSelected>>", lambda _: self.refresh())
 
         ttk.Button(
-            bar, text="⟳  Refresh",
+            bar, text="Refresh",
             command=self.refresh, style="Accent.TButton",
-        ).pack(side="left", padx=4)
+        ).pack(side="left", padx=(0, 6))
 
         self._status_label = tk.Label(
-            bar, text="", bg=theme.BG_DARK,
-            fg=theme.TEXT_SECONDARY, font=theme.FONT_SMALL,
+            bar, text="",
+            bg=theme.BG_DARK, fg=theme.TEXT_SECONDARY,
+            font=theme.FONT_SMALL,
         )
         self._status_label.pack(side="right", padx=8)
 
@@ -69,7 +73,7 @@ class RulesTab:
 
     def _build_table(self, parent):
         container = ttk.Frame(parent)
-        container.pack(fill="both", expand=True, padx=theme.PAD, pady=(theme.PAD_SM, 0))
+        container.pack(fill="both", expand=True, padx=theme.PAD, pady=0)
 
         vsb = ttk.Scrollbar(container, orient="vertical")
         self.tree = ttk.Treeview(
@@ -83,9 +87,11 @@ class RulesTab:
 
         for col in COLUMNS:
             self.tree.heading(col, text=COL_LABELS[col])
-            self.tree.column(col, width=COL_WIDTHS[col], minwidth=40, stretch=(col == "options"))
+            self.tree.column(
+                col, width=COL_WIDTHS[col], minwidth=40,
+                stretch=(col == "options"),
+            )
 
-        # Row tags
         self.tree.tag_configure("DROP",   background=theme.ROW_DROP,   foreground=theme.DANGER)
         self.tree.tag_configure("ACCEPT", background=theme.ROW_ACCEPT,  foreground=theme.SUCCESS)
         self.tree.tag_configure("LOG",    background=theme.BG_WIDGET,   foreground=theme.WARNING)
@@ -98,34 +104,37 @@ class RulesTab:
     # ─── Action bar ───────────────────────────────────────────────────────────
 
     def _build_action_bar(self, parent):
-        bar = tk.Frame(parent, bg=theme.BG_DARK, pady=8)
-        bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD_SM, theme.PAD))
+        # Buttons row
+        btn_bar = tk.Frame(parent, bg=theme.BG_DARK)
+        btn_bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD_SM, 4))
 
         state = "normal" if self._root else "disabled"
-        tip   = "" if self._root else "  (requires sudo)"
+
+        if self._root:
+            del_label   = "Delete Selected Rule"
+            flush_label = "Flush All Rules"
+        else:
+            del_label   = "Delete Selected Rule  (requires sudo)"
+            flush_label = "Flush All Rules  (requires sudo)"
 
         self._delete_btn = ttk.Button(
-            bar,
-            text=f"🗑  Delete Selected Rule{tip}",
+            btn_bar, text=del_label,
             command=self._delete_selected,
-            style="Danger.TButton",
-            state=state,
+            style="Danger.TButton", state=state,
         )
         self._delete_btn.pack(side="left", padx=(0, 8))
 
         self._flush_btn = ttk.Button(
-            bar,
-            text=f"⚠️  Flush All Rules{tip}",
+            btn_bar, text=flush_label,
             command=self._flush_chain,
-            style="Danger.TButton",
-            state=state,
+            style="Danger.TButton", state=state,
         )
-        self._flush_btn.pack(side="left", padx=4)
+        self._flush_btn.pack(side="left")
 
         if not self._root:
             tk.Label(
-                bar,
-                text="🔒 Read-only mode — restart with sudo to manage rules",
+                btn_bar,
+                text="Read-only mode -- restart with:  sudo python3 firewall_app.py",
                 bg=theme.BG_DARK, fg=theme.WARNING, font=theme.FONT_SMALL,
             ).pack(side="right", padx=8)
 
@@ -182,13 +191,15 @@ class RulesTab:
             return
         vals = self.tree.item(sel[0], "values")
         line_num = int(vals[0])
-        chain = self._chain_var.get()
+        chain    = self._chain_var.get()
 
         confirm = messagebox.askyesno(
             "Confirm Delete",
-            f"Delete rule #{line_num} from {chain} chain?\n\n"
-            f"  Target: {vals[1]}  Protocol: {vals[2]}\n"
-            f"  Source: {vals[3]}  Destination: {vals[4]}",
+            f"Delete rule #{line_num} from the {chain} chain?\n\n"
+            f"  Target:      {vals[1]}\n"
+            f"  Protocol:    {vals[2]}\n"
+            f"  Source:      {vals[3]}\n"
+            f"  Destination: {vals[4]}",
         )
         if not confirm:
             return
@@ -197,13 +208,14 @@ class RulesTab:
         self._log(msg, ok)
         if ok:
             self.refresh()
+            if self._on_action:
+                self._on_action(msg)
 
     def _flush_chain(self):
         chain = self._chain_var.get()
         confirm = messagebox.askyesno(
-            "⚠️  Confirm Flush",
-            f"This will DELETE ALL rules from the {chain} chain.\n\n"
-            f"Are you absolutely sure?",
+            "Confirm Flush",
+            f"This will DELETE ALL rules from the {chain} chain.\n\nAre you sure?",
             icon="warning",
         )
         if not confirm:
@@ -212,3 +224,5 @@ class RulesTab:
         self._log(msg, ok)
         if ok:
             self.refresh()
+            if self._on_action:
+                self._on_action(msg)

@@ -23,18 +23,17 @@ from gui.main_window import MainWindow
 
 def main():
     mode = get_mode_label()
-    root_icon = "🛡" if is_root() else "👁"
-    print(f"{root_icon}  FirewallGUI starting in {mode} mode  {root_icon}")
+    print(f"FirewallGUI starting in {mode} mode")
 
     if not is_root():
         print(
-            "  ⚠  Running without root privileges.\n"
-            "     Traffic monitoring is available, but firewall rule\n"
-            "     management is disabled.\n"
-            "     Re-run as:  sudo python3 firewall_app.py"
+            "  [WARNING] Running without root privileges.\n"
+            "  Traffic monitoring is available, but firewall rule\n"
+            "  management is disabled.\n"
+            "  Re-run as:  sudo python3 firewall_app.py"
         )
     else:
-        print("  ✓  Root detected — full firewall management enabled.")
+        print("  [OK] Root detected — full firewall management enabled.")
 
     # Check for iptables availability (informational)
     import subprocess
