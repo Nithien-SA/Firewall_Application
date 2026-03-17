@@ -1,0 +1,214 @@
+"""
+rules_tab.py
+Displays current iptables INPUT chain rules.
+Sudo users can delete individual rules or flush the chain.
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+from gui import theme
+from core import firewall
+from core.privilege import is_root
+
+COLUMNS = ("line", "target", "protocol", "source", "destination", "options")
+COL_LABELS = {
+    "line": "#", "target": "Target", "protocol": "Protocol",
+    "source": "Source", "destination": "Destination", "options": "Options / Match",
+}
+COL_WIDTHS = {
+    "line": 45, "target": 90, "protocol": 80,
+    "source": 160, "destination": 160, "options": 320,
+}
+
+
+class RulesTab:
+    def __init__(self, parent: ttk.Frame):
+        self.parent = parent
+        self._root = is_root()
+        self._chain_var = tk.StringVar(value="INPUT")
+        self._rules = []
+
+        parent.configure(style="TFrame")
+        self._build_toolbar(parent)
+        self._build_table(parent)
+        self._build_action_bar(parent)
+        self.refresh()
+
+    # ─── Toolbar ──────────────────────────────────────────────────────────────
+
+    def _build_toolbar(self, parent):
+        bar = tk.Frame(parent, bg=theme.BG_DARK, pady=6)
+        bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD, 0))
+
+        tk.Label(
+            bar, text="Chain:", bg=theme.BG_DARK,
+            fg=theme.TEXT_SECONDARY, font=theme.FONT_NORMAL,
+        ).pack(side="left", padx=(0, 6))
+
+        chain_combo = ttk.Combobox(
+            bar, textvariable=self._chain_var,
+            values=["INPUT", "OUTPUT", "FORWARD"],
+            state="readonly", width=12,
+        )
+        chain_combo.pack(side="left", padx=(0, 12))
+        chain_combo.bind("<<ComboboxSelected>>", lambda _: self.refresh())
+
+        ttk.Button(
+            bar, text="⟳  Refresh",
+            command=self.refresh, style="Accent.TButton",
+        ).pack(side="left", padx=4)
+
+        self._status_label = tk.Label(
+            bar, text="", bg=theme.BG_DARK,
+            fg=theme.TEXT_SECONDARY, font=theme.FONT_SMALL,
+        )
+        self._status_label.pack(side="right", padx=8)
+
+    # ─── Table ────────────────────────────────────────────────────────────────
+
+    def _build_table(self, parent):
+        container = ttk.Frame(parent)
+        container.pack(fill="both", expand=True, padx=theme.PAD, pady=(theme.PAD_SM, 0))
+
+        vsb = ttk.Scrollbar(container, orient="vertical")
+        self.tree = ttk.Treeview(
+            container,
+            columns=COLUMNS,
+            show="headings",
+            yscrollcommand=vsb.set,
+            selectmode="browse",
+        )
+        vsb.config(command=self.tree.yview)
+
+        for col in COLUMNS:
+            self.tree.heading(col, text=COL_LABELS[col])
+            self.tree.column(col, width=COL_WIDTHS[col], minwidth=40, stretch=(col == "options"))
+
+        # Row tags
+        self.tree.tag_configure("DROP",   background=theme.ROW_DROP,   foreground=theme.DANGER)
+        self.tree.tag_configure("ACCEPT", background=theme.ROW_ACCEPT,  foreground=theme.SUCCESS)
+        self.tree.tag_configure("LOG",    background=theme.BG_WIDGET,   foreground=theme.WARNING)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+    # ─── Action bar ───────────────────────────────────────────────────────────
+
+    def _build_action_bar(self, parent):
+        bar = tk.Frame(parent, bg=theme.BG_DARK, pady=8)
+        bar.pack(fill="x", padx=theme.PAD, pady=(theme.PAD_SM, theme.PAD))
+
+        state = "normal" if self._root else "disabled"
+        tip   = "" if self._root else "  (requires sudo)"
+
+        self._delete_btn = ttk.Button(
+            bar,
+            text=f"🗑  Delete Selected Rule{tip}",
+            command=self._delete_selected,
+            style="Danger.TButton",
+            state=state,
+        )
+        self._delete_btn.pack(side="left", padx=(0, 8))
+
+        self._flush_btn = ttk.Button(
+            bar,
+            text=f"⚠️  Flush All Rules{tip}",
+            command=self._flush_chain,
+            style="Danger.TButton",
+            state=state,
+        )
+        self._flush_btn.pack(side="left", padx=4)
+
+        if not self._root:
+            tk.Label(
+                bar,
+                text="🔒 Read-only mode — restart with sudo to manage rules",
+                bg=theme.BG_DARK, fg=theme.WARNING, font=theme.FONT_SMALL,
+            ).pack(side="right", padx=8)
+
+        # Command output log
+        log_frame = ttk.LabelFrame(parent, text=" Last Command Output ")
+        log_frame.pack(fill="x", padx=theme.PAD, pady=(0, theme.PAD))
+
+        self._log_text = tk.Text(
+            log_frame,
+            height=3, bg=theme.BG_WIDGET, fg=theme.TEXT_PRIMARY,
+            font=theme.FONT_MONO, relief="flat", state="disabled",
+            insertbackground=theme.ACCENT,
+        )
+        self._log_text.pack(fill="x", padx=4, pady=4)
+
+    # ─── Refresh ──────────────────────────────────────────────────────────────
+
+    def refresh(self):
+        chain = self._chain_var.get()
+        ok, rules, err = firewall.get_rules(chain)
+        self._rules = rules
+
+        self.tree.delete(*self.tree.get_children())
+
+        if not ok:
+            self._status_label.configure(text=f"Error: {err}", fg=theme.DANGER)
+            return
+
+        for rule in rules:
+            tag = rule.target.upper() if rule.target.upper() in ("DROP", "ACCEPT", "LOG") else ""
+            self.tree.insert("", "end", values=(
+                rule.line_num, rule.target, rule.protocol,
+                rule.source, rule.destination, rule.options,
+            ), tags=(tag,) if tag else ())
+
+        self._status_label.configure(
+            text=f"{len(rules)} rule(s) in {chain}",
+            fg=theme.TEXT_SECONDARY,
+        )
+
+    # ─── Actions ──────────────────────────────────────────────────────────────
+
+    def _log(self, msg: str, ok: bool = True):
+        color = theme.SUCCESS if ok else theme.DANGER
+        self._log_text.configure(state="normal", fg=color)
+        self._log_text.delete("1.0", "end")
+        self._log_text.insert("end", msg)
+        self._log_text.configure(state="disabled")
+
+    def _delete_selected(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Please select a rule to delete.")
+            return
+        vals = self.tree.item(sel[0], "values")
+        line_num = int(vals[0])
+        chain = self._chain_var.get()
+
+        confirm = messagebox.askyesno(
+            "Confirm Delete",
+            f"Delete rule #{line_num} from {chain} chain?\n\n"
+            f"  Target: {vals[1]}  Protocol: {vals[2]}\n"
+            f"  Source: {vals[3]}  Destination: {vals[4]}",
+        )
+        if not confirm:
+            return
+
+        ok, msg = firewall.delete_rule_by_line(chain, line_num)
+        self._log(msg, ok)
+        if ok:
+            self.refresh()
+
+    def _flush_chain(self):
+        chain = self._chain_var.get()
+        confirm = messagebox.askyesno(
+            "⚠️  Confirm Flush",
+            f"This will DELETE ALL rules from the {chain} chain.\n\n"
+            f"Are you absolutely sure?",
+            icon="warning",
+        )
+        if not confirm:
+            return
+        ok, msg = firewall.flush_chain(chain)
+        self._log(msg, ok)
+        if ok:
+            self.refresh()
