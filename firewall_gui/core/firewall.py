@@ -2,7 +2,7 @@
 firewall.py
 Wrappers around iptables commands.
 All write operations require root privileges (os.geteuid() == 0).
-Rules are persisted via iptables-save after every modification.
+Note: rules are session-only and will not survive a reboot.
 """
 
 import subprocess
@@ -48,29 +48,6 @@ def _run(cmd: list, timeout: int = 10) -> tuple[bool, str, str]:
         return False, "", f"Command not found: {e}"
 
 
-def _persist_rules():
-    """Save iptables rules so they survive reboot (requires iptables-persistent)."""
-    # Try multiple persistence methods
-    for cmd in [
-        ["iptables-save"],  # we'll redirect to file manually
-    ]:
-        pass
-
-    rules_dir = "/etc/iptables"
-    rules_file = "/etc/iptables/rules.v4"
-
-    # Ensure directory exists
-    os.makedirs(rules_dir, exist_ok=True)
-
-    ok, stdout, stderr = _run(["iptables-save"])
-    if ok and stdout:
-        try:
-            with open(rules_file, "w") as f:
-                f.write(stdout)
-            return True, f"Rules saved to {rules_file}"
-        except OSError as e:
-            return False, f"Could not write to {rules_file}: {e}"
-    return False, f"iptables-save failed: {stderr}"
 
 
 # ─── Read Operations (no root required) ───────────────────────────────────────
@@ -160,8 +137,6 @@ def block_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
             messages.append(f"Failed to block {proto.upper()} port {port}: {stderr}")
             success = False
 
-    if success:
-        _persist_rules()
     return success, "\n".join(messages)
 
 
@@ -183,8 +158,6 @@ def unblock_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
             messages.append(f"Failed to unblock {proto.upper()} port {port}: {stderr}")
             success = False
 
-    if success:
-        _persist_rules()
     return success, "\n".join(messages)
 
 
@@ -196,7 +169,6 @@ def block_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
         "iptables", "-A", direction, flag, ip, "-j", "DROP"
     ])
     if ok:
-        _persist_rules()
         return True, f"Blocked IP {ip} on {direction}"
     return False, f"Failed to block IP {ip}: {stderr}"
 
@@ -209,7 +181,6 @@ def unblock_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
         "iptables", "-D", direction, flag, ip, "-j", "DROP"
     ])
     if ok:
-        _persist_rules()
         return True, f"Unblocked IP {ip} on {direction}"
     return False, f"Failed to unblock IP {ip}: {stderr}"
 
@@ -219,7 +190,6 @@ def delete_rule_by_line(chain: str, line_num: int) -> tuple[bool, str]:
     _require_root()
     ok, _, stderr = _run(["iptables", "-D", chain, str(line_num)])
     if ok:
-        _persist_rules()
         return True, f"Deleted rule #{line_num} from {chain}"
     return False, f"Failed to delete rule #{line_num}: {stderr}"
 
@@ -229,7 +199,6 @@ def flush_chain(chain: str = "INPUT") -> tuple[bool, str]:
     _require_root()
     ok, _, stderr = _run(["iptables", "-F", chain])
     if ok:
-        _persist_rules()
         return True, f"Flushed all rules from {chain}"
     return False, f"Failed to flush {chain}: {stderr}"
 
@@ -252,8 +221,6 @@ def allow_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
             messages.append(f"Failed to allow {proto.upper()} port {port}: {stderr}")
             success = False
 
-    if success:
-        _persist_rules()
     return success, "\n".join(messages)
 
 
@@ -265,6 +232,5 @@ def allow_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
         "iptables", "-I", direction, "1", flag, ip, "-j", "ACCEPT"
     ])
     if ok:
-        _persist_rules()
         return True, f"Allowed IP {ip} on {direction}"
     return False, f"Failed to allow IP {ip}: {stderr}"

@@ -19,11 +19,10 @@ A centralized firewall management GUI for Linux, built with Python 3 + Tkinter.
 
 ```bash
 # Python 3.8+, tkinter, iptables
-sudo apt install python3-tk iptables iptables-persistent
+sudo apt install python3-tk iptables
 ```
 
-> **iptables-persistent** is required for rules to survive reboots.
-> During install, answer **Yes** to save current rules.
+> **Note:** Firewall rules are session-only — they will be cleared on reboot.
 
 ## Running
 
@@ -53,15 +52,9 @@ firewall_gui/
 └── README.md
 ```
 
-## How Rules Are Persisted
+## How Rules Work
 
-After every successful `iptables` write operation, the app automatically runs:
-
-```bash
-iptables-save > /etc/iptables/rules.v4
-```
-
-`iptables-restore` reads `/etc/iptables/rules.v4` at boot (via `iptables-persistent`).
+Rules are applied immediately via `iptables` and are **session-only** — they will be cleared when the system reboots. This is intentional for safety.
 
 ## Traffic Monitor
 
