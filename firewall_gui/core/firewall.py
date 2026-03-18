@@ -55,18 +55,21 @@ def _run(cmd: list, timeout: int = 10) -> tuple[bool, str, str]:
 def get_rules(chain: str = "INPUT") -> tuple[bool, list[Rule], str]:
     """
     Return current iptables rules for the given chain.
-    Returns (success, list_of_Rule, error_message).
+    Verbose output columns (with -v  --line-numbers):
+      0:num  1:pkts  2:bytes  3:target  4:prot  5:opt  6:in  7:out  8:source  9:dest  10+:options
+    Non-verbose (without -v):
+      0:num  1:target  2:prot  3:opt  4:source  5:dest  6+:options
     """
     ok, stdout, stderr = _run(["iptables", "-L", chain, "-n", "--line-numbers", "-v"])
+    verbose = ok
     if not ok:
-        # Try without -v in case of permissions
         ok, stdout, stderr = _run(["iptables", "-L", chain, "-n", "--line-numbers"])
     if not ok:
         return False, [], stderr or "Failed to read iptables rules."
 
     rules = []
     lines = stdout.splitlines()
-    # Skip header lines (first 2 lines: chain name + column headers)
+    # Skip header lines (chain name + column labels)
     data_lines = [l for l in lines[2:] if l.strip()]
 
     for line in data_lines:
@@ -75,34 +78,39 @@ def get_rules(chain: str = "INPUT") -> tuple[bool, list[Rule], str]:
             continue
         try:
             line_num = int(parts[0])
-            # With -v: num pkts bytes target prot opt in out source destination [extra]
-            # Without -v: num target prot opt source destination [extra]
-            if len(parts) >= 9:
-                # verbose output
-                target = parts[3]
-                protocol = parts[4]
-                source = parts[7]
-                destination = parts[8]
-                options = " ".join(parts[9:])
+        except ValueError:
+            continue
+
+        try:
+            if verbose and len(parts) >= 10:
+                # VERBOSE: num pkts bytes target prot opt in out source destination [extra...]
+                target      = parts[3]
+                protocol    = parts[4]
+                # parts[5]=opt  parts[6]=in  parts[7]=out
+                source      = parts[8]
+                destination = parts[9]
+                options     = " ".join(parts[10:])
             elif len(parts) >= 6:
-                target = parts[1]
-                protocol = parts[2]
-                source = parts[4]
+                # NON-VERBOSE: num target prot opt source destination [extra...]
+                target      = parts[1]
+                protocol    = parts[2]
+                # parts[3]=opt
+                source      = parts[4]
                 destination = parts[5]
-                options = " ".join(parts[6:])
+                options     = " ".join(parts[6:])
             else:
-                target = parts[1] if len(parts) > 1 else ""
-                protocol = ""
-                source = ""
+                target      = parts[1] if len(parts) > 1 else ""
+                protocol    = ""
+                source      = ""
                 destination = ""
-                options = ""
+                options     = ""
 
             rules.append(Rule(
                 line_num=line_num, target=target, protocol=protocol,
                 source=source, destination=destination,
                 options=options, raw=line,
             ))
-        except (ValueError, IndexError):
+        except IndexError:
             continue
 
     return True, rules, ""
@@ -120,7 +128,7 @@ def get_all_chains() -> tuple[bool, list[str], str]:
 # ─── Write Operations (root required) ─────────────────────────────────────────
 
 def block_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> tuple[bool, str]:
-    """Block communication on a port. direction = INPUT | OUTPUT | BOTH."""
+    """Block a port. Uses -I (insert at top) so DROP fires before any ACCEPT rules."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
     chains = _chains_for(direction)
@@ -129,7 +137,7 @@ def block_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> tup
     for proto in protocols:
         for chain in chains:
             ok, _, err = _run([
-                "iptables", "-A", chain,
+                "iptables", "-I", chain, "1",   # INSERT at position 1 (top)
                 "-p", proto, "--dport", str(port),
                 "-j", "DROP"
             ])
@@ -164,13 +172,13 @@ def unblock_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> t
 
 
 def block_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
-    """Block traffic for an IP. direction = INPUT | OUTPUT | BOTH."""
+    """Block an IP. Uses -I (insert at top) so DROP fires before any ACCEPT rules."""
     _require_root()
     messages = []
     success = True
     for chain in _chains_for(direction):
         flag = "-s" if chain == "INPUT" else "-d"
-        ok, _, err = _run(["iptables", "-A", chain, flag, ip, "-j", "DROP"])
+        ok, _, err = _run(["iptables", "-I", chain, "1", flag, ip, "-j", "DROP"])
         if ok:
             messages.append(f"Blocked IP {ip} on {chain}")
         else:
