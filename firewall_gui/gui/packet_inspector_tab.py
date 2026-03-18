@@ -339,22 +339,33 @@ class PacketInspectorTab:
         self._detail_clear()
         self._detail_text.configure(state="normal")
         if pkt:
+            sep  = "-" * 60
             lines = [
-                f"Packet #{pkt.number}",
-                f"Timestamp  : {pkt.timestamp}",
+                f"Packet #{pkt.number}  —  {pkt.timestamp}",
+                sep,
                 f"Protocol   : {pkt.protocol}",
-                f"Source     : {pkt.src_ip}:{pkt.src_port}",
-                f"Destination: {pkt.dst_ip}:{pkt.dst_port}",
-                f"TCP Flags  : {pkt.flags}" if pkt.flags else "",
-                f"Length     : {pkt.length} bytes" if pkt.length else "",
-                "",
-                "--- Raw tcpdump output ---",
-                pkt.raw,
-                "",
-                "--- Info ---",
-                pkt.info,
+                f"Source     : {pkt.src_ip or '—'}  port {pkt.src_port or '—'}",
+                f"Destination: {pkt.dst_ip or '—'}  port {pkt.dst_port or '—'}",
             ]
-            self._detail_text.insert("end", "\n".join(l for l in lines if l is not None))
+            if pkt.flags:
+                lines.append(f"TCP Flags  : [{pkt.flags}]")
+            if pkt.length:
+                lines.append(f"Length     : {pkt.length} bytes")
+            lines += [
+                "",
+                "--- Header / Info ---",
+                pkt.info or "(none)",
+                "",
+                "--- Raw tcpdump ---",
+                pkt.raw or "(none)",
+            ]
+            if pkt.payload.strip():
+                lines += [
+                    "",
+                    "--- Payload (ASCII) ---",
+                    pkt.payload,
+                ]
+            self._detail_text.insert("end", "\n".join(lines))
         self._detail_text.configure(state="disabled")
 
     def _detail_clear(self):

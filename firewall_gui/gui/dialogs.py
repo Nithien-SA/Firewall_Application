@@ -106,8 +106,8 @@ def ask_block_direction(parent: tk.Widget, label: str, value: str) -> str | None
     tk.Label(
         dlg, text=f"Block {label}:  {value}",
         bg=theme.BG_DARK, fg=theme.ACCENT,
-        font=theme.FONT_BOLD, padx=24, pady=(16, 4),
-    ).pack()
+        font=theme.FONT_BOLD,
+    ).pack(padx=24, pady=(16, 4))
 
     # Explanation grid
     info_frame = tk.Frame(dlg, bg=theme.BG_PANEL, padx=16, pady=8)

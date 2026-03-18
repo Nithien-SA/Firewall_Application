@@ -1,8 +1,17 @@
 """
 packet_capture.py
 Background tcpdump capture engine.
-Spawns a tcpdump subprocess in a thread and pushes parsed Packet
-objects to the GUI via a callback (safe to call from any thread).
+
+Key design decisions:
+- Uses `-i any -n -nn -l -A` so we get payload ASCII, no name resolution,
+  and line-buffered stdout.
+- With `-i any`, tcpdump prefixes some lines with "<iface> In/Out" — the
+  regex strips this optional prefix.
+- Multi-line output (header + payload) is grouped: a new packet starts
+  whenever a line matches the unix-timestamp pattern; continuation lines
+  (spaces/tabs or hex/ascii dump) are appended to the current packet's
+  raw buffer.
+- Packets are pushed to the GUI via a callback from the reader thread.
 """
 
 import subprocess
@@ -22,140 +31,143 @@ class Packet:
     src_port:  str
     dst_ip:    str
     dst_port:  str
-    protocol:  str      # TCP, UDP, ICMP, ARP, IPv6, other
-    flags:     str      # TCP flags if present
-    length:    str
-    info:      str      # full info portion from tcpdump
-    raw:       str      # complete raw line
+    protocol:  str      # TCP, UDP, ICMP, ARP, IPv6, OTHER
+    flags:     str      # TCP flags
+    length:    str      # byte count
+    info:      str      # decoded header summary
+    payload:   str      # ASCII payload (may be empty)
+    raw:       str      # complete multi-line raw dump
 
 
-# ─── Regex patterns ───────────────────────────────────────────────────────────
+# ─── Timestamp detection ──────────────────────────────────────────────────────
+# Matches "1710123456.789012" or "14:05:09.123456" as first token on a line
+_TS_START = re.compile(r"^[\d]+[.:]\d+")
 
-# IP packet:  14:23:45.123456 IP 1.2.3.4.443 > 5.6.7.8.54321: Flags [S], ...
+# ─── IP packet regex ─────────────────────────────────────────────────────────
+# Handles optional "  ethX In  " or "  ethX Out " prefix inserted by -i any
 _RE_IP = re.compile(
-    r"^(?P<ts>\d+\.\d+)\s+"
+    r"(?:^|[\s\t])"
     r"IP(?:v6)?\s+"
-    r"(?P<src>[\w:.\[\]]+?)\.(?P<sp>\w+)\s+>\s+"
-    r"(?P<dst>[\w:.\[\]]+?)\.(?P<dp>\w+):\s+"
-    r"(?P<info>.+)$"
+    r"(?P<src>[a-fA-F0-9:.[\]%\w]+?)\.(?P<sp>[\w]+)"
+    r"\s+>\s+"
+    r"(?P<dst>[a-fA-F0-9:.[\]%\w]+?)\.(?P<dp>[\w]+)"
+    r":\s+(?P<info>.+)$"
 )
 
-# ARP:  14:23:45.123456 ARP, Request who-has ...
-_RE_ARP = re.compile(r"^(?P<ts>\d+\.\d+)\s+ARP,\s+(?P<info>.+)$")
+# ARP pattern
+_RE_ARP = re.compile(r"\bARP,\s*(?P<info>.+)$")
 
-# Generic fallback
-_RE_GEN = re.compile(r"^(?P<ts>\d+\.\d+)\s+(?P<rest>.+)$")
-
-# TCP Flags extraction from info
+# TCP Flags
 _RE_FLAGS = re.compile(r"Flags\s+\[([^\]]*)\]")
 
-
-def _detect_protocol(line: str, info: str) -> str:
-    """Heuristically determine protocol name from a tcpdump line."""
-    il = line.lower()
-    if " arp," in il or "arp " in il:
-        return "ARP"
-    if "icmp" in il:
-        return "ICMP"
-    if "udp" in il or " udp" in info.lower():
-        return "UDP"
-    if "flags" in info.lower():   # TCP has Flags field
-        return "TCP"
-    if "ipv6" in il or "ip6 " in il:
-        return "IPv6"
-    return "OTHER"
+# Length field
+_RE_LEN = re.compile(r"\blength\s+(\d+)")
 
 
-def _parse_line(line: str, number: int) -> Packet | None:
-    """Parse a single tcpdump output line into a Packet. Returns None if unparseable."""
-    line = line.strip()
-    if not line or line.startswith("tcpdump") or line.startswith("dropped"):
+def _fmt_ts(raw_ts: str) -> str:
+    """Format a unix-epoch timestamp string to HH:MM:SS.usec."""
+    try:
+        val = float(raw_ts)
+        usec = int((val % 1) * 1_000_000)
+        return time.strftime("%H:%M:%S", time.localtime(val)) + f".{usec:06d}"
+    except ValueError:
+        return raw_ts
+
+
+def _parse_packet(lines: list[str], number: int) -> "Packet | None":
+    """Parse a group of tcpdump lines into a Packet."""
+    if not lines:
         return None
 
-    # Try IP pattern
-    m = _RE_IP.match(line)
+    first = lines[0]
+    raw   = "\n".join(lines)
+
+    # Extract timestamp from first token
+    ts_raw = first.split()[0] if first.split() else ""
+    ts     = _fmt_ts(ts_raw)
+
+    # Try to find the IP pattern anywhere in the first line
+    m = _RE_IP.search(first)
     if m:
-        info  = m.group("info")
-        flags = ""
-        fmatch = _RE_FLAGS.search(info)
-        if fmatch:
-            flags = fmatch.group(1)
-        proto  = _detect_protocol(line, info)
-        length = ""
-        lm = re.search(r"length\s+(\d+)", info)
-        if lm:
-            length = lm.group(1)
-        ts_raw = float(m.group("ts"))
-        ts_str = time.strftime("%H:%M:%S", time.localtime(ts_raw)) + \
-                 f".{int((ts_raw % 1) * 1000000):06d}"[0:10]
+        info   = m.group("info").strip()
+        flags  = ""
+        fm     = _RE_FLAGS.search(info)
+        if fm:
+            flags = fm.group(1)
+        lm     = _RE_LEN.search(info)
+        length = lm.group(1) if lm else ""
+
+        # Determine protocol
+        proto = "TCP" if flags or "tcp" in first.lower() else \
+                "UDP" if "UDP" in first or "udp" in first.lower() else \
+                "ICMP" if "ICMP" in first else \
+                "IPv6" if "IPv6" in first else "OTHER"
+
+        # Collect payload lines (non-header continuation)
+        payload_lines = []
+        for line in lines[1:]:
+            stripped = line.strip()
+            if stripped:
+                payload_lines.append(stripped)
+        payload = "\n".join(payload_lines)
+
         return Packet(
-            number=number,
-            timestamp=ts_str,
-            src_ip=m.group("src"),   src_port=m.group("sp"),
-            dst_ip=m.group("dst"),   dst_port=m.group("dp"),
+            number=number, timestamp=ts,
+            src_ip=m.group("src"),  src_port=m.group("sp"),
+            dst_ip=m.group("dst"),  dst_port=m.group("dp"),
             protocol=proto, flags=flags, length=length,
-            info=info, raw=line,
+            info=info, payload=payload, raw=raw,
         )
 
-    # Try ARP pattern
-    m = _RE_ARP.match(line)
-    if m:
-        ts_raw = float(m.group("ts"))
-        ts_str = time.strftime("%H:%M:%S", time.localtime(ts_raw))
+    # Try ARP
+    ma = _RE_ARP.search(first)
+    if ma:
         return Packet(
-            number=number, timestamp=ts_str,
+            number=number, timestamp=ts,
             src_ip="", src_port="", dst_ip="", dst_port="",
             protocol="ARP", flags="", length="",
-            info=m.group("info"), raw=line,
+            info=ma.group("info"), payload="", raw=raw,
         )
 
-    # Generic fallback
-    m = _RE_GEN.match(line)
-    if m:
-        ts_raw_str = m.group("ts")
-        try:
-            ts_raw = float(ts_raw_str)
-            ts_str = time.strftime("%H:%M:%S", time.localtime(ts_raw))
-        except ValueError:
-            ts_str = ts_raw_str
-        return Packet(
-            number=number, timestamp=ts_str,
-            src_ip="", src_port="", dst_ip="", dst_port="",
-            protocol="OTHER", flags="", length="",
-            info=m.group("rest"), raw=line,
-        )
-
-    return None
+    # Fallback: store raw as info
+    return Packet(
+        number=number, timestamp=ts,
+        src_ip="", src_port="", dst_ip="", dst_port="",
+        protocol="OTHER", flags="", length="",
+        info=first, payload="\n".join(lines[1:]), raw=raw,
+    )
 
 
 # ─── Capture engine ───────────────────────────────────────────────────────────
 
 class PacketCapture:
     """
-    Manages a tcpdump subprocess and pushes packets to on_packet() callback.
-    Thread-safe: callbacks are fired from a background thread; the GUI
-    should use root.after() or a queue to update widgets safely.
+    Manages a tcpdump subprocess and delivers Packet objects via on_packet().
+    Reader thread groups multi-line output and pushes complete packets.
     """
 
     def __init__(self, on_packet, on_error=None, on_stop=None):
-        self.on_packet = on_packet   # callable(Packet)
-        self.on_error  = on_error    # callable(str)
-        self.on_stop   = on_stop     # callable()
+        self.on_packet = on_packet
+        self.on_error  = on_error
+        self.on_stop   = on_stop
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._running = False
-        self._count = 0
+        self._count   = 0
 
     @property
     def is_running(self) -> bool:
         return self._running
 
     def start(self, filter_expr: str = "", interface: str = "any"):
-        """Start a new capture. Stops any existing one first."""
+        """Start capture. Stops any existing session first."""
         self.stop()
 
-        cmd = ["tcpdump", "-i", interface, "-n", "-l", "-tt"]
+        # -A : ASCII payload   -nn : no name resolution (IPs and ports as numbers)
+        # -l : line buffered   -tt : unix epoch timestamps (needed for _fmt_ts)
+        cmd = ["tcpdump", "-i", interface, "-nn", "-l", "-tt", "-A"]
         if filter_expr.strip():
+            # Split and extend (shell-like) — user enters bpf filter tokens
             cmd += filter_expr.strip().split()
 
         try:
@@ -168,11 +180,17 @@ class PacketCapture:
             )
         except FileNotFoundError:
             if self.on_error:
-                self.on_error("tcpdump not found. Install with:  sudo apt install tcpdump")
+                self.on_error(
+                    "tcpdump not found.\n"
+                    "Install it with:  sudo apt install tcpdump"
+                )
             return
-        except PermissionError:
+        except PermissionError as e:
             if self.on_error:
-                self.on_error("Permission denied. Run the app as root:  sudo python3 firewall_app.py")
+                self.on_error(
+                    f"Permission denied: {e}\n"
+                    "Run as root:  sudo python3 firewall_app.py"
+                )
             return
 
         self._running = True
@@ -181,7 +199,6 @@ class PacketCapture:
         self._thread.start()
 
     def stop(self):
-        """Stop the running capture."""
         self._running = False
         if self._proc:
             try:
@@ -196,19 +213,43 @@ class PacketCapture:
         if self.on_stop:
             self.on_stop()
 
+    # ─── Reader (background thread) ───────────────────────────────────────────
+
     def _reader(self):
-        """Background thread: read tcpdump stdout line by line."""
+        """
+        Read stdout line by line.
+        Lines starting with a timestamp begin a new packet; other lines
+        (indented payload / hex dump) are appended to the current packet.
+        """
+        current: list[str] = []
+
+        def emit():
+            if current:
+                self._count += 1
+                pkt = _parse_packet(current, self._count)
+                if pkt:
+                    self.on_packet(pkt)
+                current.clear()
+
         try:
             for line in self._proc.stdout:
                 if not self._running:
                     break
-                self._count += 1
-                pkt = _parse_line(line, self._count)
-                if pkt:
-                    self.on_packet(pkt)
-        except Exception as e:
+                # Strip only the newline, keep leading spaces (payload indent)
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+
+                if _TS_START.match(line):
+                    emit()          # flush previous packet
+                    current.append(line)
+                else:
+                    current.append(line)
+
+            emit()  # flush final packet
+        except Exception as exc:
             if self._running and self.on_error:
-                self.on_error(str(e))
+                self.on_error(str(exc))
         finally:
             self._running = False
             if self.on_stop:
