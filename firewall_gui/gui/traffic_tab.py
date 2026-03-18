@@ -17,23 +17,25 @@ from core.traffic import get_connections
 from core.privilege import is_root
 
 COLUMNS = (
-    "protocol", "local_port", "local_ip",
-    "remote_ip", "remote_port", "state", "pid", "process",
+    "protocol",
+    "local_ip", "local_port",
+    "remote_ip", "remote_port",
+    "state", "pid", "process",
 )
 COL_LABELS = {
     "protocol":    "Proto",
+    "local_ip":    "Local IP (Your Machine)",
     "local_port":  "Local Port",
-    "local_ip":    "Local IP",
     "remote_ip":   "Remote IP",
-    "remote_port": "Remote Port",
+    "remote_port": "Remote Port (Service)",
     "state":       "State",
     "pid":         "PID",
     "process":     "Process",
 }
 COL_WIDTHS = {
-    "protocol": 65, "local_port": 95, "local_ip": 150,
-    "remote_ip": 150, "remote_port": 95, "state": 115,
-    "pid": 70, "process": 170,
+    "protocol": 60, "local_ip": 150, "local_port": 90,
+    "remote_ip": 160, "remote_port": 110,
+    "state": 115, "pid": 65, "process": 160,
 }
 
 
@@ -149,7 +151,8 @@ class TrafficTab:
         vals = self._get_selected()
         if not vals:
             return
-        remote_ip = str(vals[3]).strip()
+        # COLUMNS order: protocol | local_ip | local_port | remote_ip | remote_port
+        remote_ip = str(vals[3]).strip()   # index 3 = remote_ip
         if not remote_ip or remote_ip in ("0.0.0.0", "::", "*", ""):
             messagebox.showinfo("No Remote IP",
                                 "This connection has no remote IP to block.")
@@ -182,12 +185,18 @@ class TrafficTab:
         vals = self._get_selected()
         if not vals:
             return
-        local_port = str(vals[1]).strip()
-        if not local_port or local_port in ("0", "*", ""):
-            messagebox.showinfo("No Port", "This connection has no local port to block.")
+        # COLUMNS order: protocol | local_ip | local_port | remote_ip | remote_port
+        # Offer to block the REMOTE service port (e.g. 443) which is what users typically want
+        remote_port = str(vals[4]).strip()  # index 4 = remote_port (the service port)
+        local_port  = str(vals[2]).strip()  # index 2 = local_port  (ephemeral)
+
+        # Pick the more useful port to block: the service port (remote)
+        port_to_block = remote_port if remote_port not in ("0", "*", "") else local_port
+        if not port_to_block or port_to_block in ("0", "*", ""):
+            messagebox.showinfo("No Port", "This connection has no port to block.")
             return
 
-        direction = dialogs.ask_block_direction(self.tree, label="Port", value=local_port)
+        direction = dialogs.ask_block_direction(self.tree, label="Port", value=port_to_block)
         if direction is None:
             return
 
@@ -199,7 +208,7 @@ class TrafficTab:
 
         try:
             # Attempt both TCP and UDP for the port
-            success, msg = firewall.block_port(int(local_port), "both", direction)
+            success, msg = firewall.block_port(int(port_to_block), "both", direction)
             if success:
                 messagebox.showinfo("Blocked", msg)
                 if self.on_block_action:
@@ -215,11 +224,11 @@ class TrafficTab:
         vals = self._get_selected()
         if not vals:
             return
-        remote_ip   = str(vals[3]).strip()
-        local_port  = str(vals[1]).strip()
-        # Sanitise
-        host = remote_ip  if remote_ip not in ("0.0.0.0", "::", "*", "")  else ""
-        port = local_port if local_port not in ("0", "*", "")              else ""
+        # COLUMNS: protocol | local_ip | local_port | remote_ip | remote_port
+        remote_ip   = str(vals[3]).strip()   # index 3
+        remote_port = str(vals[4]).strip()   # index 4
+        host = remote_ip   if remote_ip   not in ("0.0.0.0", "::", "*", "") else ""
+        port = remote_port if remote_port  not in ("0", "*", "")             else ""
         self.on_context_action("inspect", host, port)
 
     # ─── Connection Details ───────────────────────────────────────────────────
@@ -280,8 +289,12 @@ class TrafficTab:
         self.tree.delete(*self.tree.get_children())
         for c in conns:
             pid_str = str(c.pid) if c.pid > 0 else ""
-            values  = (
-                c.protocol, c.local_port, c.local_ip,
+            # Order MUST match COLUMNS tuple:
+            # protocol | local_ip | local_port | remote_ip | remote_port | state | pid | process
+            values = (
+                c.protocol,
+                c.local_ip,
+                c.local_port,
                 c.remote_ip   if c.remote_port else "",
                 c.remote_port if c.remote_port else "",
                 c.state, pid_str, c.process_name,
