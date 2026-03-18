@@ -9,6 +9,7 @@ Live network connections table. Right-click context menu:
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import threading
 
 from gui import theme
 from gui import dialogs
@@ -254,10 +255,21 @@ class TrafficTab:
     # ─── Data refresh ─────────────────────────────────────────────────────────
 
     def refresh(self) -> int:
+        """Synchronous refresh (kept for manual button click)."""
         conns = get_connections()
         self._connections = conns
         self._apply_filter()
         return len(conns)
+
+    def fetch_connections(self) -> int:
+        """THREAD-SAFE: fetch data only, no GUI calls. Call from background thread."""
+        conns = get_connections()
+        self._connections = conns
+        return len(conns)
+
+    def update_display(self):
+        """MAIN THREAD ONLY: rebuild the tree from the cached _connections list."""
+        self._apply_filter()
 
     def _apply_filter(self):
         ftext = self._filter_var.get().strip().lower()

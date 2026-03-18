@@ -87,20 +87,15 @@ class PacketInspectorTab:
         self._cap_filter_entry = ttk.Entry(bar, textvariable=self._cap_filter_var, width=26)
         self._cap_filter_entry.pack(side="left", padx=(0, 12))
 
-        # Start / Stop
-        self._start_btn = ttk.Button(
-            bar, text="Start Capture",
-            command=self._start_capture, style="Success.TButton",
+        # Single toggle button: Start Capture / Stop [N pkts]
+        self._toggle_btn = ttk.Button(
+            bar,
+            text="Start Capture",
+            command=self._toggle_capture,
+            style="Success.TButton",
             state="normal" if is_root() else "disabled",
         )
-        self._start_btn.pack(side="left", padx=(0, 6))
-
-        self._stop_btn = ttk.Button(
-            bar, text="Stop",
-            command=self._stop_capture, style="Danger.TButton",
-            state="disabled",
-        )
-        self._stop_btn.pack(side="left", padx=(0, 14))
+        self._toggle_btn.pack(side="left", padx=(0, 14))
 
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6)
 
@@ -124,11 +119,6 @@ class PacketInspectorTab:
         proto_cb.bind("<<ComboboxSelected>>", lambda _: self._apply_display_filter())
 
         ttk.Button(bar, text="Clear", command=self._clear).pack(side="left", padx=4)
-
-        self._status_label = tk.Label(
-            bar, text="Stopped", bg=theme.BG_DARK, fg=theme.WARNING, font=theme.FONT_SMALL,
-        )
-        self._status_label.pack(side="right", padx=8)
 
     # ─── Packet list table ────────────────────────────────────────────────────
 
@@ -184,33 +174,38 @@ class PacketInspectorTab:
 
     # ─── Capture control ──────────────────────────────────────────────────────
 
+    def _toggle_capture(self):
+        if self._capture.is_running:
+            self._stop_capture()
+        else:
+            self._start_capture()
+
     def _start_capture(self):
         filt  = self._cap_filter_var.get().strip()
         iface = self._iface_var.get().strip() or "any"
         self._packets.clear()
         self.tree.delete(*self.tree.get_children())
         self._detail_clear()
-        self._status_label.configure(text="Capturing...", fg=theme.SUCCESS)
-        self._start_btn.configure(state="disabled")
-        self._stop_btn.configure(state="normal")
+        self._toggle_btn.configure(text="Stop  [starting...]", style="Danger.TButton")
+        self._cap_filter_entry.configure(state="disabled")
         self._capture.start(filter_expr=filt, interface=iface)
         self._poll_queue()
 
     def _stop_capture(self):
         self._capture.stop()
         self._stop_poll()
-        self._start_btn.configure(state="normal" if is_root() else "disabled")
-        self._stop_btn.configure(state="disabled")
-        self._status_label.configure(
-            text=f"Stopped  ({len(self._packets)} packets)", fg=theme.WARNING,
+        n = len(self._packets)
+        self._toggle_btn.configure(
+            text="Start Capture", style="Success.TButton",
+            state="normal" if is_root() else "disabled",
         )
+        self._cap_filter_entry.configure(state="normal")
 
     def _clear(self):
         self._stop_capture()
         self._packets.clear()
         self.tree.delete(*self.tree.get_children())
         self._detail_clear()
-        self._status_label.configure(text="Cleared", fg=theme.TEXT_SECONDARY)
 
     # ─── Queue polling (thread-safe GUI update) ───────────────────────────────
 
@@ -234,11 +229,8 @@ class PacketInspectorTab:
 
         if batch:
             self._insert_packets(batch)
-            shown = len(self.tree.get_children())
-            self._status_label.configure(
-                text=f"Capturing...  {len(self._packets)} packets",
-                fg=theme.SUCCESS,
-            )
+            n = len(self._packets)
+            self._toggle_btn.configure(text=f"Stop  [{n} pkts]")
 
         if self._capture.is_running:
             self._poll_job = self.root.after(200, self._poll_queue)
@@ -256,15 +248,21 @@ class PacketInspectorTab:
     def _on_error(self, msg: str):
         def _show():
             messagebox.showerror("Capture Error", msg)
-            self._stop_btn.configure(state="disabled")
-            self._start_btn.configure(state="normal" if is_root() else "disabled")
-            self._status_label.configure(text="Error", fg=theme.DANGER)
+            self._toggle_btn.configure(
+                text="Start Capture", style="Success.TButton",
+                state="normal" if is_root() else "disabled",
+            )
+            self._cap_filter_entry.configure(state="normal")
         self.root.after(0, _show)
 
     def _on_stop(self):
         def _update():
-            self._stop_btn.configure(state="disabled")
-            self._start_btn.configure(state="normal" if is_root() else "disabled")
+            if not self._capture.is_running:
+                self._toggle_btn.configure(
+                    text="Start Capture", style="Success.TButton",
+                    state="normal" if is_root() else "disabled",
+                )
+                self._cap_filter_entry.configure(state="normal")
         self.root.after(0, _update)
 
     # ─── Table helpers ────────────────────────────────────────────────────────

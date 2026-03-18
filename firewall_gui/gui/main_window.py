@@ -6,6 +6,7 @@ Root Tk window. Tab order: Traffic | Firewall Rules | Control Panel | Packet Ins
 import tkinter as tk
 from tkinter import ttk
 import datetime
+import threading
 
 from gui import theme
 from gui.traffic_tab import TrafficTab
@@ -22,8 +23,9 @@ class MainWindow:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root_priv = is_root()
-        self._refresh_ms  = REFRESH_INTERVAL_MS
-        self._refresh_job = None
+        self._refresh_ms   = REFRESH_INTERVAL_MS
+        self._refresh_job  = None
+        self._fetch_active = False   # prevents overlapping background fetches
 
         mode = get_mode_label()
         self.root.title(f"FirewallGUI  --  {mode}")
@@ -126,14 +128,34 @@ class MainWindow:
     def _schedule_refresh(self):
         if self._refresh_job:
             self.root.after_cancel(self._refresh_job)
-        self._do_refresh()
+        self._do_refresh_async()
         self._refresh_job = self.root.after(self._refresh_ms, self._schedule_refresh)
 
-    def _do_refresh(self):
-        count = self.traffic_tab.refresh()
+    def _do_refresh_async(self):
+        """Kick off a background thread to fetch connections; update GUI when done."""
+        if self._fetch_active:
+            return   # previous fetch still running; skip this cycle
+        self._fetch_active = True
+
+        def _worker():
+            try:
+                count = self.traffic_tab.fetch_connections()
+            except Exception:
+                count = 0
+            finally:
+                # Always schedule GUI update on main thread
+                self.root.after(0, lambda: self._on_fetch_done(count))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_fetch_done(self, count: int):
+        """Called on main thread after background fetch completes."""
+        self._fetch_active = False
+        self.traffic_tab.update_display()
         self._update_statusbar(count)
-        if self.notebook.index("current") == 1:   # Firewall Rules tab visible
-            self.rules_tab.refresh()
+        # Refresh rules tab if it's visible (quick iptables -L, also async)
+        if self.notebook.index("current") == 1:
+            threading.Thread(target=self.rules_tab.refresh, daemon=True).start()
 
     # ─── Settings callbacks ───────────────────────────────────────────────────
 
