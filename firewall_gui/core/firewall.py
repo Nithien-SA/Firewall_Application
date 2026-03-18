@@ -119,88 +119,80 @@ def get_all_chains() -> tuple[bool, list[str], str]:
 
 # ─── Write Operations (root required) ─────────────────────────────────────────
 
-def block_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Block all system communication on a port (both INPUT and OUTPUT chains)."""
+def block_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> tuple[bool, str]:
+    """Block communication on a port. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
+    chains = _chains_for(direction)
     messages = []
     success = True
     for proto in protocols:
-        # Block incoming connections arriving at this port
-        ok_in, _, err_in = _run([
-            "iptables", "-A", "INPUT",
-            "-p", proto, "--dport", str(port),
-            "-j", "DROP"
-        ])
-        # Block outgoing connections going TO this port on remote hosts
-        ok_out, _, err_out = _run([
-            "iptables", "-A", "OUTPUT",
-            "-p", proto, "--dport", str(port),
-            "-j", "DROP"
-        ])
-        if ok_in and ok_out:
-            messages.append(f"Blocked {proto.upper()} port {port} (INPUT + OUTPUT)")
-        else:
-            if not ok_in:
-                messages.append(f"INPUT block failed for {proto.upper()} port {port}: {err_in}")
-            if not ok_out:
-                messages.append(f"OUTPUT block failed for {proto.upper()} port {port}: {err_out}")
-            success = False
-
+        for chain in chains:
+            ok, _, err = _run([
+                "iptables", "-A", chain,
+                "-p", proto, "--dport", str(port),
+                "-j", "DROP"
+            ])
+            if ok:
+                messages.append(f"Blocked {proto.upper()} port {port} on {chain}")
+            else:
+                messages.append(f"FAILED block {proto.upper()} port {port} on {chain}: {err}")
+                success = False
     return success, "\n".join(messages)
 
 
-def unblock_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Remove DROP rules for a port from both INPUT and OUTPUT chains."""
+def unblock_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> tuple[bool, str]:
+    """Remove DROP rules for a port. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
+    chains = _chains_for(direction)
     messages = []
     success = True
     for proto in protocols:
-        ok_in, _, err_in = _run([
-            "iptables", "-D", "INPUT",
-            "-p", proto, "--dport", str(port),
-            "-j", "DROP"
-        ])
-        ok_out, _, err_out = _run([
-            "iptables", "-D", "OUTPUT",
-            "-p", proto, "--dport", str(port),
-            "-j", "DROP"
-        ])
-        if ok_in and ok_out:
-            messages.append(f"Unblocked {proto.upper()} port {port} (INPUT + OUTPUT)")
-        else:
-            if not ok_in:
-                messages.append(f"INPUT unblock failed for {proto.upper()} port {port}: {err_in}")
-            if not ok_out:
-                messages.append(f"OUTPUT unblock failed for {proto.upper()} port {port}: {err_out}")
-            success = False
-
+        for chain in chains:
+            ok, _, err = _run([
+                "iptables", "-D", chain,
+                "-p", proto, "--dport", str(port),
+                "-j", "DROP"
+            ])
+            if ok:
+                messages.append(f"Unblocked {proto.upper()} port {port} on {chain}")
+            else:
+                messages.append(f"FAILED unblock {proto.upper()} port {port} on {chain}: {err}")
+                success = False
     return success, "\n".join(messages)
 
 
 def block_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
-    """Block all traffic from a specific IP address."""
+    """Block traffic for an IP. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
-    flag = "-s" if direction == "INPUT" else "-d"
-    ok, _, stderr = _run([
-        "iptables", "-A", direction, flag, ip, "-j", "DROP"
-    ])
-    if ok:
-        return True, f"Blocked IP {ip} on {direction}"
-    return False, f"Failed to block IP {ip}: {stderr}"
+    messages = []
+    success = True
+    for chain in _chains_for(direction):
+        flag = "-s" if chain == "INPUT" else "-d"
+        ok, _, err = _run(["iptables", "-A", chain, flag, ip, "-j", "DROP"])
+        if ok:
+            messages.append(f"Blocked IP {ip} on {chain}")
+        else:
+            messages.append(f"FAILED block IP {ip} on {chain}: {err}")
+            success = False
+    return success, "\n".join(messages)
 
 
 def unblock_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
-    """Remove DROP rule for a specific IP address."""
+    """Remove DROP rules for an IP. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
-    flag = "-s" if direction == "INPUT" else "-d"
-    ok, _, stderr = _run([
-        "iptables", "-D", direction, flag, ip, "-j", "DROP"
-    ])
-    if ok:
-        return True, f"Unblocked IP {ip} on {direction}"
-    return False, f"Failed to unblock IP {ip}: {stderr}"
+    messages = []
+    success = True
+    for chain in _chains_for(direction):
+        flag = "-s" if chain == "INPUT" else "-d"
+        ok, _, err = _run(["iptables", "-D", chain, flag, ip, "-j", "DROP"])
+        if ok:
+            messages.append(f"Unblocked IP {ip} on {chain}")
+        else:
+            messages.append(f"FAILED unblock IP {ip} on {chain}: {err}")
+            success = False
+    return success, "\n".join(messages)
 
 
 def delete_rule_by_line(chain: str, line_num: int) -> tuple[bool, str]:
@@ -221,42 +213,51 @@ def flush_chain(chain: str = "INPUT") -> tuple[bool, str]:
     return False, f"Failed to flush {chain}: {stderr}"
 
 
-def allow_port(port: int, protocol: str = "tcp") -> tuple[bool, str]:
-    """Explicitly ACCEPT a port on both INPUT and OUTPUT chains."""
+def allow_port(port: int, protocol: str = "tcp", direction: str = "BOTH") -> tuple[bool, str]:
+    """Insert ACCEPT rule for a port. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
     protocols = ["tcp", "udp"] if protocol.lower() == "both" else [protocol.lower()]
+    chains = _chains_for(direction)
     messages = []
     success = True
     for proto in protocols:
-        ok_in, _, err_in = _run([
-            "iptables", "-I", "INPUT", "1",
-            "-p", proto, "--dport", str(port),
-            "-j", "ACCEPT"
-        ])
-        ok_out, _, err_out = _run([
-            "iptables", "-I", "OUTPUT", "1",
-            "-p", proto, "--dport", str(port),
-            "-j", "ACCEPT"
-        ])
-        if ok_in and ok_out:
-            messages.append(f"Allowed {proto.upper()} port {port} (INPUT + OUTPUT)")
-        else:
-            if not ok_in:
-                messages.append(f"INPUT allow failed for {proto.upper()} port {port}: {err_in}")
-            if not ok_out:
-                messages.append(f"OUTPUT allow failed for {proto.upper()} port {port}: {err_out}")
-            success = False
-
+        for chain in chains:
+            ok, _, err = _run([
+                "iptables", "-I", chain, "1",
+                "-p", proto, "--dport", str(port),
+                "-j", "ACCEPT"
+            ])
+            if ok:
+                messages.append(f"Allowed {proto.upper()} port {port} on {chain}")
+            else:
+                messages.append(f"FAILED allow {proto.upper()} port {port} on {chain}: {err}")
+                success = False
     return success, "\n".join(messages)
 
 
 def allow_ip(ip: str, direction: str = "INPUT") -> tuple[bool, str]:
-    """Insert an ACCEPT rule at the top for a specific IP."""
+    """Insert ACCEPT rule for an IP. direction = INPUT | OUTPUT | BOTH."""
     _require_root()
-    flag = "-s" if direction == "INPUT" else "-d"
-    ok, _, stderr = _run([
-        "iptables", "-I", direction, "1", flag, ip, "-j", "ACCEPT"
-    ])
-    if ok:
-        return True, f"Allowed IP {ip} on {direction}"
-    return False, f"Failed to allow IP {ip}: {stderr}"
+    messages = []
+    success = True
+    for chain in _chains_for(direction):
+        flag = "-s" if chain == "INPUT" else "-d"
+        ok, _, err = _run([
+            "iptables", "-I", chain, "1", flag, ip, "-j", "ACCEPT"
+        ])
+        if ok:
+            messages.append(f"Allowed IP {ip} on {chain}")
+        else:
+            messages.append(f"FAILED allow IP {ip} on {chain}: {err}")
+            success = False
+    return success, "\n".join(messages)
+
+
+def _chains_for(direction: str) -> list[str]:
+    """Return list of chains for the given direction string."""
+    d = direction.upper()
+    if d == "BOTH":
+        return ["INPUT", "OUTPUT"]
+    if d in ("INPUT", "OUTPUT", "FORWARD"):
+        return [d]
+    return ["INPUT"]  # safe default
